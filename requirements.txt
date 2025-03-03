@@ -1,0 +1,34 @@
+# Core dependencies
+python-dotenv==1.0.0
+fastapi==0.104.1
+uvicorn==0.24.0
+schedule==1.2.2
+
+# Data collection and processing
+pandas==2.1.3
+yfinance==0.2.31
+python-binance==1.0.19
+ccxt==4.1.13
+
+# Database
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+elasticsearch==8.11.0
+
+# Machine Learning
+scikit-learn==1.3.2
+tensorflow==2.14.0
+torch==2.1.1
+transformers==4.35.2
+
+# RAG and NLP
+langchain==0.0.337
+faiss-cpu==1.7.4
+sentence-transformers==2.2.2
+
+# API Client
+requests==2.31.0
+aiohttp==3.9.1
+
+# Testing
+pytest==7.4.3
