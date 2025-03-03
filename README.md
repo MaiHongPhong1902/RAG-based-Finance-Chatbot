@@ -96,16 +96,3 @@ python -m src.main
   
 - **Market trends:**  
   "Analyze the current market trends for BNB."
-
-## Notes
-
-- **Binance API keys** are required for live data collection.
-- Price predictions and market analyses are provided with confidence scores and appropriate disclaimers.
-- The system updates market data automatically every 5 minutes (or based on your configuration).
-- All responses are generated with RAG (Retrieval-Augmented Generation) for more contextually relevant answers.
-```
-
-**Hướng dẫn:**
-1. Mở tệp `README.md` trong thư mục dự án (hoặc tạo mới nếu chưa có).
-2. Dán nội dung trên vào tệp `README.md`.
-3. Lưu tệp lại, và bây giờ bạn đã có một README hoàn chỉnh.
