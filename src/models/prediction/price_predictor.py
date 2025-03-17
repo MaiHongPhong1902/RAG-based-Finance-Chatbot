@@ -9,13 +9,123 @@ from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
 
 class PricePredictor:
-    """Price prediction model using LSTM"""
+    """LSTM-based price predictor"""
     
     def __init__(self):
         self.model = None
-        self.scaler = MinMaxScaler()
-        self.sequence_length = 24  # Use 24 hours of data to predict
-        self.feature_columns = ['price', 'volume']
+        self.sequence_length = 24  # 24 hours of data
+        self.feature_dim = 5  # price, change, volume, high, low
+        
+    def build_model(self):
+        """Build LSTM model"""
+        if self.model is not None:
+            return
+            
+        self.model = tf.keras.Sequential([
+            tf.keras.layers.LSTM(64, input_shape=(self.sequence_length, self.feature_dim)),
+            tf.keras.layers.Dense(32, activation='relu'),
+            tf.keras.layers.Dense(2)  # price and confidence
+        ])
+        
+        self.model.compile(
+            optimizer='adam',
+            loss='mse',
+            metrics=['mae']
+        )
+        
+    def prepare_sequence(self, data: np.ndarray) -> np.ndarray:
+        """Prepare sequence data for prediction"""
+        if len(data) < self.sequence_length:
+            # Pad with zeros if not enough data
+            padding = np.zeros((self.sequence_length - len(data), self.feature_dim))
+            data = np.vstack([padding, data])
+            
+        # Reshape for LSTM
+        return data.reshape(1, self.sequence_length, self.feature_dim)
+        
+    def predict(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Predict price for single symbol"""
+        # Extract features
+        features = np.array([
+            data.get('price', 0),
+            data.get('price_change_24h', 0),
+            data.get('volume_24h', 0),
+            data.get('high_24h', 0),
+            data.get('low_24h', 0)
+        ])
+        
+        # Prepare sequence
+        sequence = self.prepare_sequence(features)
+        
+        # Get prediction
+        prediction = self.predict_sequence(sequence)
+        
+        return {
+            'price': float(prediction[0]),
+            'confidence': float(prediction[1])
+        }
+        
+    def predict_batch(self, batch_data: np.ndarray) -> List[Dict[str, Any]]:
+        """Predict prices for batch of data"""
+        if self.model is None:
+            self.build_model()
+            
+        # Prepare sequences
+        sequences = []
+        for data in batch_data:
+            sequence = self.prepare_sequence(data)
+            sequences.append(sequence)
+            
+        # Stack sequences
+        sequences = np.vstack(sequences)
+        
+        # Get predictions
+        predictions = self.model.predict(sequences)
+        
+        # Format results
+        results = []
+        for pred in predictions:
+            results.append({
+                'price': float(pred[0]),
+                'confidence': float(pred[1])
+            })
+            
+        return results
+        
+    def predict_sequence(self, sequence: np.ndarray) -> np.ndarray:
+        """Predict price for sequence data"""
+        if self.model is None:
+            self.build_model()
+            
+        return self.model.predict(sequence)[0]
+        
+    def train(self, data: Dict[str, Any]):
+        """Train model with new data"""
+        if self.model is None:
+            self.build_model()
+            
+        # Extract features
+        features = np.array([
+            data.get('price', 0),
+            data.get('price_change_24h', 0),
+            data.get('volume_24h', 0),
+            data.get('high_24h', 0),
+            data.get('low_24h', 0)
+        ])
+        
+        # Prepare sequence
+        sequence = self.prepare_sequence(features)
+        
+        # Create target (next price)
+        target = np.array([data.get('price', 0), 1.0])  # price and confidence
+        
+        # Train model
+        self.model.fit(
+            sequence,
+            target.reshape(1, 2),
+            epochs=1,
+            verbose=0
+        )
         
     def _prepare_data(
         self,
@@ -38,102 +148,6 @@ class PricePredictor:
             X.append(scaled_features[i:(i + self.sequence_length)])
             
         return np.array(X), data['current_price']
-        
-    def _build_model(self, input_shape: tuple):
-        """Build LSTM model"""
-        model = Sequential([
-            LSTM(units=50, return_sequences=True, input_shape=input_shape),
-            Dropout(0.2),
-            LSTM(units=50, return_sequences=False),
-            Dropout(0.2),
-            Dense(units=25),
-            Dense(units=1)
-        ])
-        
-        model.compile(
-            optimizer=Adam(learning_rate=0.001),
-            loss='mse'
-        )
-        
-        return model
-        
-    def train(self, training_data: Dict[str, Any]):
-        """Train the prediction model"""
-        X, current_price = self._prepare_data(training_data)
-        
-        if len(X) < self.sequence_length:
-            raise ValueError("Insufficient data for training")
-            
-        if self.model is None:
-            self.model = self._build_model(
-                input_shape=(self.sequence_length, len(self.feature_columns))
-            )
-            
-        # Use the last sequence for validation
-        X_train = X[:-1]
-        y_train = X[1:, -1, 0]  # Use the next price as target
-        
-        self.model.fit(
-            X_train, y_train,
-            epochs=50,
-            batch_size=32,
-            verbose=0
-        )
-        
-    def predict(
-        self,
-        data: Dict[str, Any],
-        prediction_hours: int = 24
-    ) -> List[Dict[str, Any]]:
-        """Generate price predictions"""
-        if self.model is None:
-            raise ValueError("Model not trained")
-            
-        X, current_price = self._prepare_data(data)
-        
-        if len(X) < 1:
-            raise ValueError("Insufficient data for prediction")
-            
-        # Use the last sequence for prediction
-        last_sequence = X[-1:]
-        
-        predictions = []
-        current_sequence = last_sequence.copy()
-        
-        for i in range(prediction_hours):
-            # Predict next value
-            next_pred = self.model.predict(current_sequence, verbose=0)
-            
-            # Scale back to original range
-            scaled_pred = np.zeros((1, len(self.feature_columns)))
-            scaled_pred[0, 0] = next_pred[0]  # Price prediction
-            # Use last volume for simplicity
-            scaled_pred[0, 1] = current_sequence[0, -1, 1]
-            
-            original_scale_pred = self.scaler.inverse_transform(scaled_pred)
-            predicted_price = original_scale_pred[0, 0]
-            
-            # Calculate confidence based on historical volatility
-            price_history = np.array(data['price_history'])
-            volatility = np.std(price_history) / np.mean(price_history)
-            confidence = max(0, min(1, 1 - volatility))
-            
-            # Store prediction
-            prediction_time = datetime.now() + timedelta(hours=i+1)
-            predictions.append({
-                'timestamp': prediction_time.isoformat(),
-                'price': predicted_price,
-                'confidence': confidence
-            })
-            
-            # Update sequence for next prediction
-            new_sequence = np.zeros((1, self.sequence_length, len(self.feature_columns)))
-            new_sequence[0, :-1] = current_sequence[0, 1:]
-            new_sequence[0, -1, 0] = next_pred[0]  # Predicted price
-            new_sequence[0, -1, 1] = current_sequence[0, -1, 1]  # Last volume
-            current_sequence = new_sequence
-            
-        return predictions
         
     def analyze_market_sentiment(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze market sentiment based on available data"""

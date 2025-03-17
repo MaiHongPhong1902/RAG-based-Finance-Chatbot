@@ -1,12 +1,14 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from typing import Dict, Any, List
-from binance.client import AsyncClient
+from typing import Dict, Any, List, Optional
+from binance.client import AsyncClient, Client
 from binance.exceptions import BinanceAPIException
+import asyncio
 
 from .base_collector import BaseDataCollector
 from config.config import Config
+from src.data.cache import MarketDataCache
 
 class BinanceDataCollector(BaseDataCollector):
     """Data collector for Binance cryptocurrency exchange"""
@@ -14,12 +16,13 @@ class BinanceDataCollector(BaseDataCollector):
     def __init__(self):
         super().__init__()
         self.client = None
+        self.cache = MarketDataCache()
         
     async def initialize(self):
         """Initialize Binance client"""
-        self.client = await AsyncClient.create(
-            api_key=Config.BINANCE_API_KEY,
-            api_secret=Config.BINANCE_API_SECRET
+        self.client = Client(
+            Config.BINANCE_API_KEY,
+            Config.BINANCE_API_SECRET
         )
         
     async def close(self):
@@ -27,21 +30,28 @@ class BinanceDataCollector(BaseDataCollector):
         if self.client:
             await self.client.close_connection()
             
-    async def fetch_current_price(self, symbol: str) -> Dict[str, Any]:
-        """Fetch current price and 24h statistics for a given symbol"""
+    async def fetch_current_price(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Fetch current price data for symbol"""
+        # Check cache first
+        cached_data = self.cache.get_cached_data(symbol)
+        if cached_data:
+            return cached_data
+            
         try:
-            ticker = await self.client.get_ticker(symbol=symbol)
-            return {
+            # Fetch from Binance
+            ticker = self.client.get_symbol_ticker(symbol=symbol)
+            price_data = {
                 'symbol': symbol,
-                'price': float(ticker['lastPrice']),
-                'change_24h': float(ticker['priceChangePercent']),
-                'volume_24h': float(ticker['volume']),
-                'high_24h': float(ticker['highPrice']),
-                'low_24h': float(ticker['lowPrice']),
-                'timestamp': datetime.now()
+                'price': float(ticker['price']),
+                'timestamp': datetime.now().isoformat()
             }
+            
+            # Cache the data
+            self.cache.set_cached_data(symbol, price_data)
+            return price_data
+            
         except BinanceAPIException as e:
-            print(f"Error fetching current price for {symbol}: {str(e)}")
+            print(f"Error fetching price for {symbol}: {str(e)}")
             return None
             
     async def fetch_historical_data(
@@ -81,30 +91,24 @@ class BinanceDataCollector(BaseDataCollector):
             print(f"Error fetching historical data for {symbol}: {str(e)}")
             return pd.DataFrame()
             
-    async def fetch_market_indicators(self, symbol: str) -> Dict[str, Any]:
-        """Fetch market indicators including order book and recent trades"""
+    async def fetch_market_indicators(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Fetch market indicators for symbol"""
         try:
-            # Get order book
-            depth = await self.client.get_order_book(symbol=symbol)
+            # Get 24h ticker
+            ticker_24h = self.client.get_ticker(symbol=symbol)
             
-            # Get recent trades
-            trades = await self.client.get_recent_trades(symbol=symbol)
-            
-            # Calculate market indicators
-            bid_ask_spread = (float(depth['asks'][0][0]) - float(depth['bids'][0][0]))
-            order_book_imbalance = self._calculate_order_book_imbalance(depth)
-            
-            return {
-                'symbol': symbol,
-                'bid_ask_spread': bid_ask_spread,
-                'order_book_imbalance': order_book_imbalance,
-                'order_book_depth': len(depth['bids']),
-                'recent_trades_count': len(trades),
-                'timestamp': datetime.now()
+            indicators = {
+                'price_change_24h': float(ticker_24h['priceChangePercent']),
+                'volume_24h': float(ticker_24h['volume']),
+                'high_24h': float(ticker_24h['highPrice']),
+                'low_24h': float(ticker_24h['lowPrice']),
+                'timestamp': datetime.now().isoformat()
             }
             
+            return indicators
+            
         except BinanceAPIException as e:
-            print(f"Error fetching market indicators for {symbol}: {str(e)}")
+            print(f"Error fetching indicators for {symbol}: {str(e)}")
             return None
             
     def _calculate_order_book_imbalance(self, depth: Dict) -> float:

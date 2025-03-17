@@ -6,19 +6,19 @@ from langchain.vectorstores import FAISS
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
+from sentence_transformers import SentenceTransformer
 
 from config.config import Config
 from src.data.storage.database import DatabaseManager
+from src.models.rag.vector_store_manager import VectorStoreManager
 
 class FinanceRetriever:
     """Retriever class for financial data using RAG"""
     
     def __init__(self):
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=Config.EMBEDDINGS_MODEL
-        )
         self.db = DatabaseManager()
-        self.vector_store = None
+        self.vector_store = VectorStoreManager()
+        self.encoder = SentenceTransformer('all-MiniLM-L6-v2')
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=Config.CHUNK_SIZE,
             chunk_overlap=Config.CHUNK_OVERLAP
@@ -27,6 +27,7 @@ class FinanceRetriever:
     def initialize(self):
         """Initialize the retriever"""
         self.db.initialize()
+        self.vector_store.initialize()
         
     def _create_market_context(self, symbol: str) -> str:
         """Create market context from latest data"""
@@ -90,54 +91,65 @@ class FinanceRetriever:
         return documents
         
     def update_vector_store(self, symbols: List[str]):
-        """Update vector store with latest market data"""
-        all_documents = []
+        """Update vector store with new market data"""
+        # Get current market data
+        market_data = {}
+        vectors = []
+        symbols_list = []
+        
         for symbol in symbols:
-            documents = self._create_documents(symbol)
-            all_documents.extend(documents)
-            
-        if not all_documents:
+            data = self.db.get_market_data(symbol)
+            if data:
+                market_data[symbol] = data
+                # Create vector representation
+                text = self._format_market_data(data)
+                vector = self.encoder.encode([text])[0]
+                vectors.append(vector)
+                symbols_list.append(symbol)
+                
+        if not vectors:
             return
             
-        if self.vector_store is None:
-            self.vector_store = FAISS.from_documents(
-                all_documents,
-                self.embeddings
-            )
-        else:
-            self.vector_store.add_documents(all_documents)
+        # Check if update is needed
+        if not self.vector_store.should_update(market_data):
+            return
             
-    def retrieve_context(self, query: str, k: int = None) -> List[str]:
-        """Retrieve relevant context for a query"""
-        if self.vector_store is None:
-            return []
-            
-        k = k or Config.TOP_K_RESULTS
-        documents = self.vector_store.similarity_search(query, k=k)
-        return [doc.page_content for doc in documents]
+        # Update vector store
+        vectors_array = np.array(vectors)
+        metadata = {
+            'prices': {s: d.get('price', 0) for s, d in market_data.items()},
+            'symbols': symbols_list
+        }
+        self.vector_store.update(vectors_array, metadata)
+        
+    def retrieve_context(self, query: str) -> List[str]:
+        """Retrieve relevant context for query"""
+        # Encode query
+        query_vector = self.encoder.encode([query])[0]
+        
+        # Search vector store
+        results = self.vector_store.search(query_vector)
+        
+        # Get context from database
+        context = []
+        for result in results:
+            symbol = result['symbol']
+            market_data = self.db.get_market_data(symbol)
+            if market_data:
+                context.append(self._format_market_data(market_data))
+                
+        return context
         
     def get_price_prediction_context(self, symbol: str) -> Dict[str, Any]:
         """Get context for price prediction"""
-        latest_data = self.db.get_latest_price(symbol)
-        if not latest_data:
-            return {}
-            
-        # Get historical data for analysis
-        end_time = datetime.now()
-        start_time = end_time - timedelta(days=7)  # Last 7 days
-        historical_data = self.db.get_historical_prices(symbol, start_time, end_time)
+        return self.db.get_market_data(symbol)
         
-        if historical_data.empty:
-            return {}
-            
-        # Calculate technical indicators
-        context = {
-            'current_price': latest_data['price'],
-            'price_history': historical_data['price'].tolist(),
-            'volume_history': historical_data['volume'].tolist(),
-            'timestamps': [ts.isoformat() for ts in historical_data.index],
-            'market_indicators': latest_data.get('indicators', {}),
-            'change_24h': latest_data['change_24h']
-        }
-        
-        return context
+    def _format_market_data(self, data: Dict[str, Any]) -> str:
+        """Format market data for vector representation"""
+        formatted = f"Symbol: {data.get('symbol', '')}\n"
+        formatted += f"Price: ${data.get('price', 0):.2f}\n"
+        formatted += f"24h Change: {data.get('price_change_24h', 0):.2f}%\n"
+        formatted += f"24h Volume: {data.get('volume_24h', 0):.2f}\n"
+        formatted += f"24h High: ${data.get('high_24h', 0):.2f}\n"
+        formatted += f"24h Low: ${data.get('low_24h', 0):.2f}\n"
+        return formatted
