@@ -1,6 +1,6 @@
 ## RAG-based Finance Chatbot
 
-**A RAG-based Finance Chatbot designed to provide accurate and timely cryptocurrency price predictions. By leveraging real-time data, historical analysis, and machine learning, this chatbot delivers informed responses about cryptocurrency markets.
+A RAG-based Finance Chatbot designed to provide accurate and timely cryptocurrency price predictions. By leveraging real-time data, historical analysis, and machine learning, this chatbot delivers informed responses about cryptocurrency markets.
 
 ```markdown
 ## Project Structure
